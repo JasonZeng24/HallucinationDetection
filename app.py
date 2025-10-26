@@ -3,156 +3,150 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import numpy as np
 import pandas as pd
-import os
+# 移除了 os 模块，因为它不再是必需的
 
 # ========================================================================
-# --- 配置信息 ---
+# --- 云端部署配置 ---
 # ========================================================================
-# 🚨 你的 Hugging Face 仓库 ID
-HF_REPO_ID = "Jasonzeng/EduCheck" 
+# 🚨 你的 Hugging Face 仓库 ID (包含 model.safetensors, config.json)
+MODEL_REPO_ID = "Jasonzeng/EduCheck" 
+# 🚨 分词器来源 ID (与你本地代码中的 'distilbert-base-uncased' 对应)
+TOKENIZER_ID = "distilbert-base-uncased"
+# ========================================================================
 
-# --- 标签映射和 UI 配置 ---
+
+# --- 1. Label Mapping ---
 LABEL_MAPPING = {
     0: "Non-Hallucination (Safe) ✅",
     1: "Hallucination Detected 🚨"
 }
 CONFIDENCE_LABELS = ["Non-Hallucination", "Hallucination"]
 
-# ========================================================================
-# --- 模型加载函数 (使用 Streamlit 缓存) ---
-# ========================================================================
 
 @st.cache_resource
 def load_model_and_tokenizer():
     """
-    加载模型和分词器。使用 @st.cache_resource 确保只在 Streamlit 启动时运行一次。
-    如果 HF 仓库配置正确，from_pretrained() 会自动处理大文件的下载和缓存。
+    加载模型和分词器。分词器从公共 ID 加载，模型权重从你的 HF 仓库 ID 加载。
     """
-    st.info(f"正在从 Hugging Face Hub 加载模型: {HF_REPO_ID}...")
+    st.info(f"正在加载分词器 ({TOKENIZER_ID}) 和模型权重 ({MODEL_REPO_ID})...")
+    
     try:
-        # 使用仓库 ID 直接加载分词器和模型
-        tokenizer = AutoTokenizer.from_pretrained(HF_REPO_ID)
-        model = AutoModelForSequenceClassification.from_pretrained(HF_REPO_ID)
+        # 1. 加载分词器 (从公共仓库加载，不需要你上传分词器文件)
+        tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
         
-        st.success("模型和分词器加载成功！")
+        # 2. 加载模型权重 (从你的 HF 仓库加载大文件)
+        # 此时，AutoModel 只需要你的仓库中有 model.safetensors 和 config.json
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_REPO_ID, num_labels=2)
+        model.eval()
+        
+        st.success("✅ Model Loaded Successfully!")
         return tokenizer, model
-        
     except Exception as e:
-        st.error(f"❌ 加载模型或分词器失败。错误信息: {e}")
-        st.error("请立即检查你的 Hugging Face 仓库，确保所有必要的配置文件（config.json, tokenizer.json 等）都已上传。")
+        st.error(f"❌ Error loading EduCheck-SFT model. 详情: {e}") 
+        st.error(f"请检查：1) 分词器 ID ({TOKENIZER_ID}) 是否拼写正确。2) 仓库 ({MODEL_REPO_ID}) 中是否包含 'model.safetensors' 和 'config.json'。")
         return None, None
 
-# --- 在 Streamlit 应用启动时加载模型 ---
-tokenizer_real, model_real = load_model_and_tokenizer()
-
-# ========================================================================
-# --- 预测函数 ---
-# ========================================================================
-
+# --- The actual prediction function (保持不变) ---
 def predict_hallucination(input_text: str, tokenizer, model):
-    """使用加载的模型进行幻觉预测。"""
-    if model is None or tokenizer is None:
+    """Predicts hallucination using the loaded model."""
+    if model and tokenizer:
+        inputs = tokenizer(input_text, 
+                            padding="max_length", 
+                            truncation=True, 
+                            max_length=128, 
+                            return_tensors="pt")
+        
+        with torch.no_grad():
+            outputs = model(**inputs)
+            
+        probabilities = torch.softmax(outputs.logits, dim=1).squeeze().numpy()
+        predicted_class_id = np.argmax(probabilities).item()
+        confidence = probabilities[predicted_class_id].item()
+        
+        return predicted_class_id, confidence, probabilities
+        
+    else:
+        st.error("Prediction failed: Model not loaded. Please check model files.")
         return None, None, None
 
-    # 设置模型为评估模式
-    model.eval()
-    
-    # 编码输入文本
-    inputs = tokenizer(input_text, 
-                       padding="max_length", 
-                       truncation=True, 
-                       max_length=128, 
-                       return_tensors="pt")
-    
-    # 禁用梯度计算
-    with torch.no_grad():
-        outputs = model(**inputs)
-        
-    # 计算概率
-    probabilities = torch.softmax(outputs.logits, dim=1).squeeze().numpy()
-    
-    # 获取预测类别ID和置信度
-    predicted_class_id = np.argmax(probabilities).item()
-    confidence = probabilities[predicted_class_id].item()
-    
-    return predicted_class_id, confidence, probabilities
+# --- Load the model (try real, fall back to failure) ---
+tokenizer_real, model_real = load_model_and_tokenizer()
 
 # =======================================================
-# --- Streamlit UI 组件 ---
+# --- Streamlit UI Components (保持不变) ---
 # =======================================================
 
 st.set_page_config(layout="wide", page_title="EduCheck: AI Content Safety")
 
-st.title("🛡️ EduCheck: AI 教育内容安全检测器")
+st.title("🛡️ EduCheck: AI Educational Content Safety Detector")
 st.markdown("---")
 
-st.subheader("超越事实核查：检测教学法和概念缺陷")
-st.info("该工具验证 AI 生成的教学内容的**教学健全性**和**概念准确性**。")
+st.subheader("Beyond Fact-Checking: Detecting Pedagogical & Conceptual Flaws")
+st.info("This tool validates the **Pedagogical Soundness** and **Conceptual Accuracy** of AI-generated teaching content. It utilizes the EduCheck-SFT model, trained with a weighted loss function, achieving a **'Safety-First (High Recall)'** design objective.")
 
+
+# --- Input Area ---
 col_topic, col_answer = st.columns([1, 2])
-safe_explanation = "数组是一种数据结构，用于存储固定大小的、元素类型相同且位于相邻内存位置的有序集合。"
+
+safe_explanation = "An Array is a data structure used to store a fixed-size sequential collection of elements of the same type in adjacent memory locations."
 
 with col_topic:
     user_topic = st.text_area(
-        "1. 教学主题 (Topic):",
-        "数据结构 (数组)", 
+        "1. Teaching Topic (Topic):",
+        "Data Structure (Array)", 
         height=100
     )
 
 with col_answer:
     ai_answer = st.text_area(
-        "2. AI 生成的解释 (Explanation):",
+        "2. AI-Generated Explanation (Explanation):",
         safe_explanation, 
         height=100
     )
 
-if st.button("🚨 运行 EduCheck 分析", type="primary"):
-    if model_real is None:
-        st.error("模型未加载。无法运行分析。请检查 Streamlit 日志中的错误信息。")
-        st.stop()
-        
+# --- Prediction Execution ---
+if st.button("🚨 Run EduCheck Analysis", type="primary"):
     if not user_topic or not ai_answer:
-        st.warning("请同时填写教学主题和 AI 解释文本。")
+        st.warning("Please fill in both the Teaching Topic and the AI Explanation text.")
         st.stop()
 
-    # 格式化输入文本
+    # Format input text
     input_text = f"### Topic:\n{user_topic}\n\n### Explanation:\n{ai_answer}"
     
-    # 运行预测
-    predicted_id, confidence, probabilities = predict_hallucination(
-        input_text, tokenizer_real, model_real
-    )
+    # Run Prediction
+    predicted_id, confidence, probabilities = predict_hallucination(input_text, tokenizer_real, model_real)
     
-    # 仅在预测成功时继续
+    # Only proceed if prediction was successful
     if predicted_id is not None:
         st.markdown("---")
         
+        # --- Result Display ---
         col_res, col_metric = st.columns(2)
         
         predicted_label = LABEL_MAPPING.get(predicted_id)
 
         with col_res:
             if predicted_id == 1:
-                st.error(f"### 结果: {predicted_label}")
+                st.error(f"### Result: {predicted_label}")
             else:
-                st.success(f"### 结果: {predicted_label}")
+                st.success(f"### Result: {predicted_label}")
 
         with col_metric:
-            st.metric("置信度分数 (Confidence)", f"{confidence:.2%}")
+            st.metric("Confidence Score (Confidence)", f"{confidence:.2%}")
             
-        st.markdown("#### 诊断报告")
+        st.markdown("#### Diagnostic Report")
 
-        # --- 显示诊断详情 ---
+        # --- Display only general diagnosis ---
         if predicted_id == 1:
-            st.error(f"**缺陷类型:** 高风险幻觉")
-            st.write(f"**诊断详情:** 模型检测到高风险幻觉。**建议人工审核**。")
+            st.error(f"**Flaw Type:** High Risk Hallucination")
+            st.write(f"**Diagnosis Details:** The model detected a high-risk hallucination based on its core classification. **Human Review is Recommended** to categorize the specific error type (Factual, Conceptual, or Pedagogical).")
                 
         else:
-            st.info("模型判定内容安全。该解释**概念准确且教学法上合理**。")
+            st.info("Model judges content as safe. This explanation is **conceptually accurate and pedagogically sound** for the target audience.")
 
-        # --- 详细概率分布 ---
+        # --- Detailed Probability Distribution ---
         st.markdown("---")
-        st.markdown("#### 详细概率分布（二元）")
+        st.markdown("#### Detailed Probability Distribution (Binary)")
         
         probs_df = pd.Series(
             probabilities, 
