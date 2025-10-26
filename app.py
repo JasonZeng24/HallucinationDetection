@@ -12,7 +12,7 @@ from huggingface_hub import hf_hub_download
 HF_REPO_ID = "Jasonzeng/EduCheck" 
 # 🚨 假设模型权重文件名为 'pytorch_model.bin' 或 'model.safetensors'
 # 请将其更改为你的实际模型权重文件名（例如 'training_args.bin' 如果它就是权重）
-MODEL_WEIGHT_FILENAME = "pytorch_model.bin" 
+MODEL_WEIGHT_FILENAME = "training_args.bin" 
 
 # 需要下载的文件列表，确保这些文件都存在于 Jasonzeng/EduCheck 仓库根目录
 REQUIRED_FILES = [
