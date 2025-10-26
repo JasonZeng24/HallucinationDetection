@@ -5,3 +5,4 @@ pandas
 transformers
 scikit-learn
 safetensors
+huggingface_hub
